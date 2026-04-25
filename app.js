@@ -6,8 +6,36 @@ const STYLE_OPTIONS = [
   { label: "Sans-serif", value: "sans-serif" },
 ];
 
-const BLANK_STATE = { isBold: false, isItalic: false, isScript: false, isSans: false };
+const blankState = () => ({ isBold: false, isItalic: false, isScript: false, isSans: false });
 const hasPending = (s) => s.isBold || s.isItalic || s.isScript;
+const sameFormatting = (a, b) =>
+  a.isBold === b.isBold && a.isItalic === b.isItalic && a.isScript === b.isScript && a.isSans === b.isSans;
+
+function applyToggleToState(state, formatType) {
+  const next = { ...state };
+  const key = { bold: "isBold", italic: "isItalic", script: "isScript" }[formatType];
+  next[key] = !next[key];
+  if (formatType === "script" && next.isScript) {
+    next.isBold = false;
+    next.isItalic = false;
+  } else if (next[key] && (formatType === "bold" || formatType === "italic")) {
+    next.isScript = false;
+  }
+  return next;
+}
+
+function replaceRangeWith(range, text) {
+  range.deleteContents();
+  const node = document.createTextNode(text);
+  range.insertNode(node);
+  const sel = window.getSelection();
+  sel.removeAllRanges();
+  const newRange = document.createRange();
+  newRange.setStart(node, 0);
+  newRange.setEnd(node, text.length);
+  sel.addRange(newRange);
+  return node;
+}
 
 const LinkedinApp = defineComponent({
   template: "#linkedin-app-template",
@@ -15,20 +43,15 @@ const LinkedinApp = defineComponent({
     const message = naive.useMessage();
     const dialog = naive.useDialog();
 
+    const editorRef = ref(null);
     const editorContent = ref("");
     const charCount = computed(() => editorContent.value.length);
-    const charCountClass = computed(() => {
-      if (charCount.value > 2800) return "char-over";
-      if (charCount.value > 2500) return "char-warn";
-      return "";
-    });
+    const charCountClass = computed(() =>
+      charCount.value > 2800 ? "char-over" :
+      charCount.value > 2500 ? "char-warn" : ""
+    );
 
-    const pendingFormatting = reactive({
-      isBold: false,
-      isItalic: false,
-      isScript: false,
-      isSans: false,
-    });
+    const pendingFormatting = reactive(blankState());
 
     const savedConfig = JSON.parse(localStorage.getItem("typographyConfig") || "{}");
     const config = reactive({
@@ -36,110 +59,71 @@ const LinkedinApp = defineComponent({
       boldItalic: savedConfig.boldItalic || "serif",
     });
 
-    const editorRef = ref(null);
-
-    function getStyleNameFromState(state) {
-      if (state.isScript) return "script";
-
-      const sans =
-        state.isBold && state.isItalic ? config.boldItalic === "sans-serif" :
-        state.isItalic ? config.italic === "sans-serif" :
-        state.isSans;
-
-      const parts = [];
-      if (sans) parts.push("sans-serif");
-      if (state.isBold) parts.push("bold");
-      if (state.isItalic) parts.push("italic");
-      return parts.join("-");
+    function withConfigSans(state) {
+      if (!state.isItalic) return state;
+      const wantsSans = state.isBold
+        ? config.boldItalic === "sans-serif"
+        : config.italic === "sans-serif";
+      return { ...state, isSans: wantsSans };
     }
 
     function inferStateFromContext(textNode, offset) {
-      for (let i = offset - 1; i >= 0; i--) {
-        const char = textNode.textContent[i];
-        if (char.trim().length === 0) continue;
-        return window.getFormattingState(char);
-      }
-      return { ...BLANK_STATE };
+      const match = textNode.textContent.slice(0, offset).match(/(\S)\s*$/);
+      return match ? window.getFormattingState(match[1]) : blankState();
+    }
+
+    function syncEditorContent() {
+      editorContent.value = editorRef.value.innerText;
+    }
+
+    function applyPendingFormatting(char) {
+      if (!hasPending(pendingFormatting) || char.trim().length === 0) return;
+      const sel = window.getSelection();
+      if (sel.rangeCount === 0 || !sel.getRangeAt(0).collapsed) return;
+
+      const range = sel.getRangeAt(0);
+      const node = range.startContainer;
+      const offset = range.startOffset;
+      if (node.nodeType !== Node.TEXT_NODE || offset === 0) return;
+
+      const ch = node.textContent.substring(offset - 1, offset);
+      const converted = window.convert(ch, withConfigSans(pendingFormatting));
+      if (converted === ch) return;
+
+      const text = node.textContent;
+      node.textContent = text.slice(0, offset - 1) + converted + text.slice(offset);
+
+      const newRange = document.createRange();
+      const newOffset = offset - 1 + converted.length;
+      newRange.setStart(node, newOffset);
+      newRange.setEnd(node, newOffset);
+      sel.removeAllRanges();
+      sel.addRange(newRange);
     }
 
     function handleInput(event) {
       if (event.inputType === "insertText" && event.data) {
         applyPendingFormatting(event.data);
       }
-      editorContent.value = editorRef.value.innerText;
-      updateToolbarState();
+      syncEditorContent();
     }
 
     function handleKeydown(e) {
       if (!(e.ctrlKey || e.metaKey)) return;
-      const key = e.key.toLowerCase();
-      if (key === "b") { e.preventDefault(); toggleFormat("bold"); }
-      else if (key === "i") { e.preventDefault(); toggleFormat("italic"); }
-      else if (key === "s") { e.preventDefault(); toggleFormat("script"); }
-    }
-
-    function applyPendingFormatting(char) {
-      const selection = window.getSelection();
-      if (selection.rangeCount === 0 || !selection.getRangeAt(0).collapsed) return;
-
-      const range = selection.getRangeAt(0);
-      const textNode = range.startContainer;
-      const offset = range.startOffset;
-
-      if (textNode.nodeType !== Node.TEXT_NODE || offset === 0) return;
-      if (!hasPending(pendingFormatting)) return;
-      if (char.trim().length === 0) return;
-
-      const charToConvert = textNode.textContent.substring(offset - 1, offset);
-      const styleName = getStyleNameFromState(pendingFormatting);
-      if (!styleName) return;
-
-      try {
-        const converted = window.convert_to(charToConvert, styleName);
-        if (converted === charToConvert) return;
-
-        const prefix = textNode.textContent.substring(0, offset - 1);
-        const suffix = textNode.textContent.substring(offset);
-        textNode.textContent = prefix + converted + suffix;
-
-        const newRange = document.createRange();
-        const newOffset = offset - 1 + converted.length;
-        newRange.setStart(textNode, newOffset);
-        newRange.setEnd(textNode, newOffset);
-        selection.removeAllRanges();
-        selection.addRange(newRange);
-      } catch (err) {
-        console.error("Unicode conversion error:", err);
-      }
-    }
-
-    function applyToggleToState(state, formatType) {
-      const next = { ...state };
-      if (formatType === "script") {
-        next.isScript = !next.isScript;
-        if (next.isScript) { next.isBold = false; next.isItalic = false; }
-      } else if (formatType === "bold") {
-        next.isBold = !next.isBold;
-        if (next.isBold) next.isScript = false;
-      } else if (formatType === "italic") {
-        next.isItalic = !next.isItalic;
-        if (next.isItalic) next.isScript = false;
-      }
-      return next;
+      const fmt = { b: "bold", i: "italic", s: "script" }[e.key.toLowerCase()];
+      if (fmt) { e.preventDefault(); toggleFormat(fmt); }
     }
 
     function toggleFormat(formatType) {
-      const selection = window.getSelection();
-      if (selection.rangeCount === 0) return;
-
-      const range = selection.getRangeAt(0);
+      const sel = window.getSelection();
+      if (sel.rangeCount === 0) return;
+      const range = sel.getRangeAt(0);
 
       if (range.collapsed) {
         if (!hasPending(pendingFormatting)) {
           Object.assign(pendingFormatting, inferStateFromContext(range.startContainer, range.startOffset));
         }
         Object.assign(pendingFormatting, applyToggleToState(pendingFormatting, formatType));
-        updateToolbarState();
         editorRef.value.focus();
         return;
       }
@@ -147,42 +131,24 @@ const LinkedinApp = defineComponent({
       const selectedText = range.toString();
       if (!selectedText) return;
 
-      const normalText = window.normalize(selectedText);
-      const targetState = applyToggleToState(window.getFormattingState(selectedText), formatType);
-      const styleName = getStyleNameFromState(targetState);
+      const normal = window.normalize(selectedText);
+      const target = applyToggleToState(window.getFormattingState(selectedText), formatType);
+      const formatted = hasPending(target) ? window.convert(normal, withConfigSans(target)) : normal;
 
-      let formattedText = normalText;
-      if (styleName) {
-        try { formattedText = window.convert_to(normalText, styleName); }
-        catch { formattedText = normalText; }
-      }
-
-      range.deleteContents();
-      const textNode = document.createTextNode(formattedText);
-      range.insertNode(textNode);
-
-      selection.removeAllRanges();
-      const newRange = document.createRange();
-      newRange.setStart(textNode, 0);
-      newRange.setEnd(textNode, formattedText.length);
-      selection.addRange(newRange);
-
-      editorContent.value = editorRef.value.innerText;
+      replaceRangeWith(range, formatted);
+      syncEditorContent();
       editorRef.value.focus();
-      Object.assign(pendingFormatting, targetState);
-      updateToolbarState();
+      Object.assign(pendingFormatting, target);
     }
 
     function clearFormatting() {
-      Object.assign(pendingFormatting, BLANK_STATE);
-      const selection = window.getSelection();
-      if (selection.rangeCount === 0) return;
-
-      const range = selection.getRangeAt(0);
-      const editorEl = editorRef.value;
+      Object.assign(pendingFormatting, blankState());
+      const sel = window.getSelection();
+      if (sel.rangeCount === 0) return;
+      const range = sel.getRangeAt(0);
 
       if (range.collapsed) {
-        const walker = document.createTreeWalker(editorEl, NodeFilter.SHOW_TEXT, null, false);
+        const walker = document.createTreeWalker(editorRef.value, NodeFilter.SHOW_TEXT);
         let node;
         while ((node = walker.nextNode())) {
           const normalized = window.normalize(node.textContent);
@@ -191,19 +157,11 @@ const LinkedinApp = defineComponent({
       } else {
         const selectedText = range.toString();
         if (!selectedText) return;
-        const plainText = window.normalize(selectedText);
-        range.deleteContents();
-        const textNode = document.createTextNode(plainText);
-        range.insertNode(textNode);
-        selection.removeAllRanges();
-        const newRange = document.createRange();
-        newRange.selectNodeContents(textNode);
-        selection.addRange(newRange);
+        replaceRangeWith(range, window.normalize(selectedText));
       }
 
-      editorContent.value = editorEl.innerText;
-      editorEl.focus();
-      updateToolbarState();
+      syncEditorContent();
+      editorRef.value.focus();
     }
 
     function clearEditor() {
@@ -215,31 +173,30 @@ const LinkedinApp = defineComponent({
         onPositiveClick: () => {
           editorRef.value.innerHTML = "";
           editorContent.value = "";
-          Object.assign(pendingFormatting, BLANK_STATE);
+          Object.assign(pendingFormatting, blankState());
           editorRef.value.focus();
-          updateToolbarState();
         },
       });
     }
 
     function updateToolbarState() {
-      const selection = window.getSelection();
-      if (!selection.rangeCount || !editorRef.value || !editorRef.value.contains(selection.anchorNode)) {
-        return;
-      }
-      const range = selection.getRangeAt(0);
+      const sel = window.getSelection();
+      if (!sel.rangeCount || !editorRef.value || !editorRef.value.contains(sel.anchorNode)) return;
+      const range = sel.getRangeAt(0);
 
+      let next;
       if (range.collapsed) {
-        if (range.startContainer.nodeType === Node.TEXT_NODE && !hasPending(pendingFormatting)) {
-          Object.assign(pendingFormatting, inferStateFromContext(range.startContainer, range.startOffset));
-        }
-        return;
+        if (range.startContainer.nodeType !== Node.TEXT_NODE) return;
+        if (hasPending(pendingFormatting)) return;
+        next = inferStateFromContext(range.startContainer, range.startOffset);
+      } else {
+        const text = range.toString();
+        if (!text) return;
+        next = window.getFormattingState(text);
       }
 
-      const textToCheck = range.toString();
-      if (textToCheck) {
-        Object.assign(pendingFormatting, window.getFormattingState(textToCheck));
-      }
+      if (sameFormatting(next, pendingFormatting)) return;
+      Object.assign(pendingFormatting, next);
     }
 
     async function copyToClipboard() {
