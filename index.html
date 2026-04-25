@@ -3,12 +3,133 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>LinkedIn Post Editor (Vue.js)</title>
+    <title>LinkedIn Post Editor</title>
+
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
     <link rel="stylesheet" href="styles.css" />
+
+    <!-- Vue 3 & Naive UI -->
+    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+    <script src="https://unpkg.com/naive-ui"></script>
+    <script src="/naive-ui-theme.js"></script>
   </head>
   <body>
-    <div id="app"></div>
-    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+    <div id="app" v-cloak>
+      <n-config-provider :theme-overrides="theme">
+        <n-message-provider>
+          <n-dialog-provider>
+            <linkedin-app></linkedin-app>
+          </n-dialog-provider>
+        </n-message-provider>
+      </n-config-provider>
+    </div>
+
+    <template id="linkedin-app-template">
+      <div class="container">
+        <header class="app-header">
+          <h1>LinkedIn Post Editor</h1>
+          <p class="subtitle">Write bold and italic posts for LinkedIn.</p>
+        </header>
+
+        <n-card class="post-card" :bordered="true">
+          <div class="post-header">
+            <div class="profile-circle"></div>
+            <div class="user-info">
+              <div class="user-name">Your Name</div>
+              <div class="user-title">Your Title • Your Company</div>
+            </div>
+          </div>
+
+          <div
+            ref="editorRef"
+            class="editor"
+            contenteditable="true"
+            :data-placeholder="placeholder"
+            @input="handleInput"
+            @keydown="handleKeydown"
+          ></div>
+
+          <div class="toolbar">
+            <n-button-group>
+              <n-button
+                :type="pendingFormatting.isBold ? 'primary' : 'default'"
+                :secondary="!pendingFormatting.isBold"
+                @click.prevent="toggleFormat('bold')"
+                title="Bold (Ctrl+B)"
+              >
+                <strong>B</strong>
+              </n-button>
+              <n-button
+                :type="pendingFormatting.isItalic ? 'primary' : 'default'"
+                :secondary="!pendingFormatting.isItalic"
+                @click.prevent="toggleFormat('italic')"
+                title="Italic (Ctrl+I)"
+              >
+                <em>I</em>
+              </n-button>
+              <n-button
+                :type="pendingFormatting.isScript ? 'primary' : 'default'"
+                :secondary="!pendingFormatting.isScript"
+                @click.prevent="toggleFormat('script')"
+                title="Script (Ctrl+S)"
+              >
+                𝒮
+              </n-button>
+            </n-button-group>
+            <n-button quaternary size="small" @click.prevent="clearFormatting">
+              Clear formatting
+            </n-button>
+          </div>
+
+          <div class="actions">
+            <div class="char-counter">
+              <span :class="charCountClass">{{ charCount }}</span> characters
+            </div>
+            <n-space>
+              <n-button @click="clearEditor">Clear</n-button>
+              <n-button type="primary" @click="copyToClipboard">
+                Copy to LinkedIn
+              </n-button>
+            </n-space>
+          </div>
+        </n-card>
+
+        <n-collapse class="config-collapse">
+          <n-collapse-item title="Typography settings" name="config">
+            <n-space vertical>
+              <n-space align="center">
+                <span class="config-label">Italic style</span>
+                <n-select
+                  v-model:value="config.italic"
+                  :options="styleOptions"
+                  size="small"
+                  style="width: 160px"
+                />
+                <transition name="flash">
+                  <span v-if="savedFlash.italic" class="saved-flash" aria-label="Saved">✓</span>
+                </transition>
+              </n-space>
+              <n-space align="center">
+                <span class="config-label">Bold + italic style</span>
+                <n-select
+                  v-model:value="config.boldItalic"
+                  :options="styleOptions"
+                  size="small"
+                  style="width: 160px"
+                />
+                <transition name="flash">
+                  <span v-if="savedFlash.boldItalic" class="saved-flash" aria-label="Saved">✓</span>
+                </transition>
+              </n-space>
+            </n-space>
+          </n-collapse-item>
+        </n-collapse>
+      </div>
+    </template>
+
     <script src="unicode.js"></script>
     <script src="app.js"></script>
   </body>

@@ -38,7 +38,7 @@ const CHARMAPS = [
   new UnicodeMap("𝖠", 0x1d5a0, "Sans-Serif", false, false),
   new UnicodeMap("𝗔", 0x1d5d4, "Sans-Serif Bold", true, false),
   new UnicodeMap("𝘈", 0x1d608, "Sans-Serif Italic", false, true),
-  new UnicodeMap("𝘼", 0x1d63c, "Sans-Seriff Italic Bold", true, true),
+  new UnicodeMap("𝘼", 0x1d63c, "Sans-Serif Italic Bold", true, true),
   new UnicodeMap("𝙰", 0x1d670, "Monospace Regular", false, false),
   new UnicodeMap("𝚨", 0x1d6a8, "Monospace Bold", true, false),
 ];
@@ -61,74 +61,63 @@ const STYLES = {
   "monospace-bold": new Style("monospace", CHARMAPS[10], DIGIMAPS[3]),
 };
 
+// Math Italic 'h' is reserved at U+1D455; the actual italic h lives at U+210E.
+const RESERVED_FALLBACKS = { 0x1d455: 0x210e };
+
 function convert_to(text, styleName) {
   const style = STYLES[styleName];
   if (!style) {
     throw new Error(`Style "${styleName}" not found.`);
   }
-  const charmap = style.charmap;
-  const digitmap = style.digitmap;
+  const { charmap, digitmap } = style;
   let result = "";
 
   for (const char of text) {
     const code = char.codePointAt(0);
 
-    let offset = 0;
-    if (code >= 65 && code <= 90) {
-      // A-Z
-      offset = code - 65;
-    } else if (code >= 97 && code <= 122) {
-      // a-z
-      offset = code - 97 + CHARMAP_SPLIT;
-    } else if (code >= 48 && code <= 57) {
-      // 0-9
-      if (digitmap === undefined) {
-        result += char;
-        continue;
-      }
-      offset = code - 48;
-      result += String.fromCodePoint(digitmap.unicode + offset);
-      continue;
-    } else {
-      result += char;
+    if (code >= 48 && code <= 57) {
+      result += digitmap ? String.fromCodePoint(digitmap.unicode + (code - 48)) : char;
       continue;
     }
 
-    if (charmap === undefined) {
-      result += char;
-      continue;
-    }
-    result += String.fromCodePoint(charmap.unicode + offset);
+    let offset;
+    if (code >= 65 && code <= 90) offset = code - 65;
+    else if (code >= 97 && code <= 122) offset = code - 97 + CHARMAP_SPLIT;
+    else { result += char; continue; }
+
+    if (!charmap) { result += char; continue; }
+    const target = charmap.unicode + offset;
+    result += String.fromCodePoint(RESERVED_FALLBACKS[target] ?? target);
   }
 
   return result;
 }
 
+// Reverse of RESERVED_FALLBACKS so out-of-block fallbacks normalize back to ASCII.
+const FALLBACK_REVERSE = { 0x210e: "h" };
+
 function normalize(text) {
   let result = "";
   for (const char of text) {
     const code = char.codePointAt(0);
-    let converted = char;
-    let found = false;
 
+    if (FALLBACK_REVERSE[code]) {
+      result += FALLBACK_REVERSE[code];
+      continue;
+    }
+
+    let converted = char;
     for (const map of DIGIMAPS) {
       if (code >= map.unicode && code < map.unicode + map.length) {
         converted = String.fromCodePoint(48 + (code - map.unicode));
-        found = true;
         break;
       }
     }
-
-    if (!found) {
+    if (converted === char) {
       for (const map of CHARMAPS) {
         if (code >= map.unicode && code < map.unicode + map.length) {
           const offset = code - map.unicode;
-          if (offset < 26) {
-            converted = String.fromCodePoint(65 + offset);
-          } else {
-            converted = String.fromCodePoint(97 + (offset - 26));
-          }
-          found = true;
+          converted = String.fromCodePoint((offset < 26 ? 65 : 97 - 26) + offset);
           break;
         }
       }
@@ -151,6 +140,8 @@ function getFormattingState(text) {
 
   for (const char of text) {
     const code = char.codePointAt(0);
+
+    if (code === 0x210e) { state.isItalic = true; return state; }
 
     for (const map of CHARMAPS) {
       if (code >= map.unicode && code < map.unicode + map.length) {
